@@ -1,15 +1,18 @@
 package azurerm
 
 import (
+	"context"
 	"fmt"
 	"log"
+	"regexp"
 	"strings"
+	"time"
 
 	"github.com/Azure/azure-sdk-for-go/services/servicebus/mgmt/2017-04-01/servicebus"
 	"github.com/hashicorp/terraform/helper/schema"
 	"github.com/hashicorp/terraform/helper/validation"
+	"github.com/terraform-providers/terraform-provider-azurerm/azurerm/helpers/tf"
 	"github.com/terraform-providers/terraform-provider-azurerm/azurerm/utils"
-	"regexp"
 )
 
 // Default Authorization Rule/Policy created by Azure, used to populate the
@@ -18,13 +21,19 @@ var serviceBusNamespaceDefaultAuthorizationRule = "RootManageSharedAccessKey"
 
 func resourceArmServiceBusNamespace() *schema.Resource {
 	return &schema.Resource{
-		Create: resourceArmServiceBusNamespaceCreate,
+		Create: resourceArmServiceBusNamespaceCreateUpdate,
 		Read:   resourceArmServiceBusNamespaceRead,
-		Update: resourceArmServiceBusNamespaceCreate,
+		Update: resourceArmServiceBusNamespaceCreateUpdate,
 		Delete: resourceArmServiceBusNamespaceDelete,
 
 		Importer: &schema.ResourceImporter{
 			State: schema.ImportStatePassthrough,
+		},
+
+		Timeouts: &schema.ResourceTimeout{
+			Create: schema.DefaultTimeout(time.Minute * 30),
+			Update: schema.DefaultTimeout(time.Minute * 30),
+			Delete: schema.DefaultTimeout(time.Minute * 30),
 		},
 
 		MigrateState:  resourceAzureRMServiceBusNamespaceMigrateState,
@@ -106,7 +115,7 @@ func resourceArmServiceBusNamespace() *schema.Resource {
 	}
 }
 
-func resourceArmServiceBusNamespaceCreate(d *schema.ResourceData, meta interface{}) error {
+func resourceArmServiceBusNamespaceCreateUpdate(d *schema.ResourceData, meta interface{}) error {
 	client := meta.(*ArmClient).serviceBusNamespacesClient
 	ctx := meta.(*ArmClient).StopContext
 
@@ -117,6 +126,19 @@ func resourceArmServiceBusNamespaceCreate(d *schema.ResourceData, meta interface
 	resourceGroup := d.Get("resource_group_name").(string)
 	sku := d.Get("sku").(string)
 	tags := d.Get("tags").(map[string]interface{})
+
+	if d.IsNewResource() {
+		// first check if there's one in this subscription requiring import
+		resp, err := client.Get(ctx, resourceGroup, name)
+		if err != nil {
+			if !utils.ResponseWasNotFound(resp.Response) {
+				return fmt.Errorf("Error checking for the existence of Service Bus Namespace %q (Resource Group %q): %+v", name, resourceGroup, err)
+			}
+		}
+		if resp.ID != nil {
+			return tf.ImportAsExistsError("azurerm_servicebus_namespace", *resp.ID)
+		}
+	}
 
 	parameters := servicebus.SBNamespace{
 		Location: &location,
@@ -136,21 +158,21 @@ func resourceArmServiceBusNamespaceCreate(d *schema.ResourceData, meta interface
 		return err
 	}
 
-	err = future.WaitForCompletionRef(ctx, client.Client)
-	if err != nil {
+	waitCtx, cancel := context.WithTimeout(ctx, d.Timeout(tf.TimeoutForCreateUpdate(d)))
+	defer cancel()
+	if err = future.WaitForCompletionRef(waitCtx, client.Client); err != nil {
 		return err
 	}
 
-	read, err := client.Get(ctx, resourceGroup, name)
+	resp, err := client.Get(ctx, resourceGroup, name)
 	if err != nil {
 		return err
 	}
-
-	if read.ID == nil {
+	if resp.ID == nil {
 		return fmt.Errorf("Cannot read ServiceBus Namespace %q (resource group %q) ID", name, resourceGroup)
 	}
 
-	d.SetId(*read.ID)
+	d.SetId(*resp.ID)
 
 	return resourceArmServiceBusNamespaceRead(d, meta)
 }
@@ -212,8 +234,9 @@ func resourceArmServiceBusNamespaceDelete(d *schema.ResourceData, meta interface
 	resourceGroup := id.ResourceGroup
 	name := id.Path["namespaces"]
 
-	_, err = client.Delete(ctx, resourceGroup, name)
-	if err != nil {
+	waitCtx, cancel := context.WithTimeout(ctx, d.Timeout(schema.TimeoutDelete))
+	defer cancel()
+	if _, err = client.Delete(waitCtx, resourceGroup, name); err != nil {
 		return err
 	}
 

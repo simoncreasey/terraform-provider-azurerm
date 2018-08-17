@@ -1,12 +1,15 @@
 package azurerm
 
 import (
+	"context"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/Azure/azure-sdk-for-go/services/preview/authorization/mgmt/2018-01-01-preview/authorization"
 	"github.com/hashicorp/go-uuid"
 	"github.com/hashicorp/terraform/helper/schema"
+	"github.com/terraform-providers/terraform-provider-azurerm/azurerm/helpers/tf"
 	"github.com/terraform-providers/terraform-provider-azurerm/azurerm/utils"
 )
 
@@ -18,6 +21,11 @@ func resourceArmRoleDefinition() *schema.Resource {
 		Delete: resourceArmRoleDefinitionDelete,
 		Importer: &schema.ResourceImporter{
 			State: schema.ImportStatePassthrough,
+		},
+		Timeouts: &schema.ResourceTimeout{
+			Create: schema.DefaultTimeout(time.Minute * 10),
+			Update: schema.DefaultTimeout(time.Minute * 10),
+			Delete: schema.DefaultTimeout(time.Minute * 10),
 		},
 
 		Schema: map[string]*schema.Schema{
@@ -82,18 +90,32 @@ func resourceArmRoleDefinitionCreateUpdate(d *schema.ResourceData, meta interfac
 	client := meta.(*ArmClient).roleDefinitionsClient
 	ctx := meta.(*ArmClient).StopContext
 
+	scope := d.Get("scope").(string)
 	roleDefinitionId := d.Get("role_definition_id").(string)
-	if roleDefinitionId == "" {
+	if roleDefinitionId != "" {
+		if d.IsNewResource() {
+			// first check if there's one in this subscription requiring import
+			resp, err := client.Get(ctx, scope, roleDefinitionId)
+			if err != nil {
+				if !utils.ResponseWasNotFound(resp.Response) {
+					return fmt.Errorf("Error checking for the existence of Role Definition ID %q (Scope %q): %+v", roleDefinitionId, scope, err)
+				}
+			}
+
+			if resp.ID != nil {
+				return tf.ImportAsExistsError("azurerm_role_definition", *resp.ID)
+			}
+		}
+	} else {
 		uuid, err := uuid.GenerateUUID()
 		if err != nil {
-			return fmt.Errorf("Error generating UUID for Role Assignment: %+v", err)
+			return fmt.Errorf("Error generating UUID for Role Definition: %+v", err)
 		}
 
 		roleDefinitionId = uuid
 	}
 
 	name := d.Get("name").(string)
-	scope := d.Get("scope").(string)
 	description := d.Get("description").(string)
 	roleType := "CustomRole"
 	permissions := expandRoleDefinitionPermissions(d)
@@ -109,7 +131,9 @@ func resourceArmRoleDefinitionCreateUpdate(d *schema.ResourceData, meta interfac
 		},
 	}
 
-	_, err := client.CreateOrUpdate(ctx, scope, roleDefinitionId, properties)
+	waitCtx, cancel := context.WithTimeout(ctx, d.Timeout(tf.TimeoutForCreateUpdate(d)))
+	defer cancel()
+	_, err := client.CreateOrUpdate(waitCtx, scope, roleDefinitionId, properties)
 	if err != nil {
 		return err
 	}
@@ -163,10 +187,14 @@ func resourceArmRoleDefinitionDelete(d *schema.ResourceData, meta interface{}) e
 	client := meta.(*ArmClient).roleDefinitionsClient
 	ctx := meta.(*ArmClient).StopContext
 
+	// TODO: update the ID so we can parse it out
+	// which means the config isn't required for deletion
 	roleDefinitionId := d.Get("role_definition_id").(string)
 	scope := d.Get("scope").(string)
 
-	resp, err := client.Delete(ctx, scope, roleDefinitionId)
+	waitCtx, cancel := context.WithTimeout(ctx, d.Timeout(schema.TimeoutDelete))
+	defer cancel()
+	resp, err := client.Delete(waitCtx, scope, roleDefinitionId)
 	if err != nil {
 		if utils.ResponseWasNotFound(resp.Response) {
 			return nil

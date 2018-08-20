@@ -25,15 +25,13 @@ func resourceArmServiceBusNamespace() *schema.Resource {
 		Read:   resourceArmServiceBusNamespaceRead,
 		Update: resourceArmServiceBusNamespaceCreateUpdate,
 		Delete: resourceArmServiceBusNamespaceDelete,
-
-		Importer: &schema.ResourceImporter{
-			State: schema.ImportStatePassthrough,
-		},
-
 		Timeouts: &schema.ResourceTimeout{
 			Create: schema.DefaultTimeout(time.Minute * 30),
 			Update: schema.DefaultTimeout(time.Minute * 30),
 			Delete: schema.DefaultTimeout(time.Minute * 30),
+		},
+		Importer: &schema.ResourceImporter{
+			State: schema.ImportStatePassthrough,
 		},
 
 		MigrateState:  resourceAzureRMServiceBusNamespaceMigrateState,
@@ -122,10 +120,7 @@ func resourceArmServiceBusNamespaceCreateUpdate(d *schema.ResourceData, meta int
 	log.Printf("[INFO] preparing arguments for AzureRM ServiceBus Namespace creation.")
 
 	name := d.Get("name").(string)
-	location := azureRMNormalizeLocation(d.Get("location").(string))
 	resourceGroup := d.Get("resource_group_name").(string)
-	sku := d.Get("sku").(string)
-	tags := d.Get("tags").(map[string]interface{})
 
 	if d.IsNewResource() {
 		// first check if there's one in this subscription requiring import
@@ -140,6 +135,9 @@ func resourceArmServiceBusNamespaceCreateUpdate(d *schema.ResourceData, meta int
 		}
 	}
 
+	location := azureRMNormalizeLocation(d.Get("location").(string))
+	sku := d.Get("sku").(string)
+	tags := d.Get("tags").(map[string]interface{})
 	parameters := servicebus.SBNamespace{
 		Location: &location,
 		Sku: &servicebus.SBSku{

@@ -2,14 +2,17 @@ package azurerm
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/Azure/azure-sdk-for-go/services/network/mgmt/2018-04-01/network"
 	"github.com/hashicorp/terraform/helper/hashcode"
 	"github.com/hashicorp/terraform/helper/schema"
 	"github.com/hashicorp/terraform/helper/validation"
+	"github.com/terraform-providers/terraform-provider-azurerm/azurerm/helpers/tf"
 	"github.com/terraform-providers/terraform-provider-azurerm/azurerm/helpers/validate"
 	"github.com/terraform-providers/terraform-provider-azurerm/azurerm/utils"
 )
@@ -23,8 +26,12 @@ func resourceArmVirtualNetworkGateway() *schema.Resource {
 		Importer: &schema.ResourceImporter{
 			State: schema.ImportStatePassthrough,
 		},
-
 		CustomizeDiff: resourceArmVirtualNetworkGatewayCustomizeDiff,
+		Timeouts: &schema.ResourceTimeout{
+			Create: schema.DefaultTimeout(time.Minute * 30),
+			Update: schema.DefaultTimeout(time.Minute * 30),
+			Delete: schema.DefaultTimeout(time.Minute * 30),
+		},
 
 		Schema: map[string]*schema.Schema{
 			"name": {
@@ -258,8 +265,23 @@ func resourceArmVirtualNetworkGatewayCreateUpdate(d *schema.ResourceData, meta i
 	log.Printf("[INFO] preparing arguments for AzureRM Virtual Network Gateway creation.")
 
 	name := d.Get("name").(string)
-	location := azureRMNormalizeLocation(d.Get("location").(string))
 	resGroup := d.Get("resource_group_name").(string)
+
+	if d.IsNewResource() {
+		// first check if there's one in this subscription requiring import
+		resp, err := client.Get(ctx, resGroup, name)
+		if err != nil {
+			if !utils.ResponseWasNotFound(resp.Response) {
+				return fmt.Errorf("Error checking for the existence of Virtual Network Gateway %q (Resource Group %q): %+v", name, resGroup, err)
+			}
+		}
+
+		if resp.ID != nil {
+			return tf.ImportAsExistsError("azurerm_virtual_network_gateway", *resp.ID)
+		}
+	}
+
+	location := azureRMNormalizeLocation(d.Get("location").(string))
 	tags := d.Get("tags").(map[string]interface{})
 
 	properties, err := getArmVirtualNetworkGatewayProperties(d)
@@ -279,7 +301,9 @@ func resourceArmVirtualNetworkGatewayCreateUpdate(d *schema.ResourceData, meta i
 		return fmt.Errorf("Error Creating/Updating AzureRM Virtual Network Gateway %q (Resource Group %q): %+v", name, resGroup, err)
 	}
 
-	err = future.WaitForCompletionRef(ctx, client.Client)
+	waitCtx, cancel := context.WithTimeout(ctx, d.Timeout(tf.TimeoutForCreateUpdate(d)))
+	defer cancel()
+	err = future.WaitForCompletionRef(waitCtx, client.Client)
 	if err != nil {
 		return fmt.Errorf("Error waiting for completion of AzureRM Virtual Network Gateway %q (Resource Group %q): %+v", name, resGroup, err)
 	}
@@ -374,7 +398,9 @@ func resourceArmVirtualNetworkGatewayDelete(d *schema.ResourceData, meta interfa
 		return fmt.Errorf("Error deleting Virtual Network Gateway %q (Resource Group %q): %+v", name, resGroup, err)
 	}
 
-	err = future.WaitForCompletionRef(ctx, client.Client)
+	waitCtx, cancel := context.WithTimeout(ctx, d.Timeout(schema.TimeoutDelete))
+	defer cancel()
+	err = future.WaitForCompletionRef(waitCtx, client.Client)
 	if err != nil {
 		return fmt.Errorf("Error waiting for deletion of Virtual Network Gateway %q (Resource Group %q): %+v", name, resGroup, err)
 	}

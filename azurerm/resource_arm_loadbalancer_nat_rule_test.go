@@ -244,7 +244,7 @@ func TestAccAzureRMLoadBalancerNatRule_disableFloatingIP(t *testing.T) {
 
 func testCheckAzureRMLoadBalancerNatRuleExists(natRuleName string, lb *network.LoadBalancer) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
-		_, _, exists := findLoadBalancerNatRuleByName(lb, natRuleName)
+		_, exists := findAzureRMLoadBalancerNatRuleByName(lb, natRuleName)
 		if !exists {
 			return fmt.Errorf("A NAT Rule with name %q cannot be found.", natRuleName)
 		}
@@ -255,7 +255,7 @@ func testCheckAzureRMLoadBalancerNatRuleExists(natRuleName string, lb *network.L
 
 func testCheckAzureRMLoadBalancerNatRuleNotExists(natRuleName string, lb *network.LoadBalancer) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
-		_, _, exists := findLoadBalancerNatRuleByName(lb, natRuleName)
+		_, exists := findAzureRMLoadBalancerNatRuleByName(lb, natRuleName)
 		if exists {
 			return fmt.Errorf("A NAT Rule with name %q has been found.", natRuleName)
 		}
@@ -269,7 +269,7 @@ func testCheckAzureRMLoadBalancerNatRuleDisappears(natRuleName string, lb *netwo
 		client := testAccProvider.Meta().(*ArmClient).loadBalancerClient
 		ctx := testAccProvider.Meta().(*ArmClient).StopContext
 
-		_, i, exists := findLoadBalancerNatRuleByName(lb, natRuleName)
+		i, exists := findAzureRMLoadBalancerNatRuleByName(lb, natRuleName)
 		if !exists {
 			return fmt.Errorf("A Nat Rule with name %q cannot be found.", natRuleName)
 		}
@@ -296,6 +296,20 @@ func testCheckAzureRMLoadBalancerNatRuleDisappears(natRuleName string, lb *netwo
 		_, err = client.Get(ctx, id.ResourceGroup, *lb.Name, "")
 		return err
 	}
+}
+
+func findAzureRMLoadBalancerNatRuleByName(lb *network.LoadBalancer, name string) (int, bool) {
+	if lb == nil || lb.LoadBalancerPropertiesFormat == nil || lb.LoadBalancerPropertiesFormat.InboundNatRules == nil {
+		return -1, false
+	}
+
+	for i, nr := range *lb.LoadBalancerPropertiesFormat.InboundNatRules {
+		if nr.Name != nil && *nr.Name == name {
+			return i, true
+		}
+	}
+
+	return -1, false
 }
 
 func testAccAzureRMLoadBalancerNatRule_basic(rInt int, natRuleName string, location string) string {
